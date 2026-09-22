@@ -41,8 +41,9 @@ def test_cli_mock_workflow_approval_and_export(tmp_path: Path) -> None:
     assert advanced.exit_code == 0, advanced.output
     artifact = tmp_path / "stage-result.txt"
     artifact.write_text("verified mock output")
-    for _ in range(9):
-        advanced = invoke(tmp_path, "advance", project_id, "--artifact", str(artifact))
+    for stage_number in range(9):
+        arguments = ("--mock",) if stage_number == 1 else ("--artifact", str(artifact))
+        advanced = invoke(tmp_path, "advance", project_id, *arguments)
         assert advanced.exit_code == 0, advanced.output
     blocked = invoke(tmp_path, "advance", project_id)
     assert blocked.exit_code != 0

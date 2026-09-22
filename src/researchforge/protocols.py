@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, Protocol
 from uuid import UUID
 
+from researchforge.literature import PaperRecord
 from researchforge.models import Artifact, Checkpoint, ResearchProject, ResearchState
 
 
@@ -30,7 +31,7 @@ class ModelProvider(Protocol):
 
 
 class LiteratureProvider(Protocol):
-    def search(self, query: str) -> tuple[dict[str, Any], ...]: ...
+    def search(self, query: str, limit: int = 10) -> tuple[PaperRecord, ...]: ...
 
 
 class SandboxRunner(Protocol):

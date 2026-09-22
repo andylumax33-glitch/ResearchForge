@@ -16,12 +16,14 @@ No real LLM, literature retrieval, generated-code execution, Docker, or web UI i
 
 ## v0.2.0 — Literature + Evidence
 
-- Replaceable literature providers
-- Paper records, evidence cards, source locators, and scope reports
-- Claim–Evidence Graph and citation verification
-- Evidence-bound answers that refuse unsupported claims
-- Paper2Agent integration through an adapter rather than copied implementation
-- Fixed literature fixtures and repeatable evaluation
+- Shipped: replaceable fixed-fixture and opt-in Crossref bibliographic providers
+- Shipped: paper records, located passages, evidence cards, and scope reports
+- Shipped: Claim–Evidence Graph with literal quote, hash, and citation checks
+- Shipped: evidence-bound answers that refuse unsupported or out-of-scope claims
+- Shipped: external Paper2Agent manifest adapter without copied implementation
+- Shipped: fixed synthetic literature fixture and repeatable evaluation
+
+This version verifies internal provenance and exact quotations. Independent retrieval and authentication of a publisher's full text remains a future extension.
 
 ## v0.3.0 — Reproducible Experiments
 
@@ -49,4 +51,3 @@ No real LLM, literature retrieval, generated-code execution, Docker, or web UI i
 ## Explicitly deferred beyond v1
 
 Agent marketplaces, self-evolving agents, a general-purpose knowledge-graph platform, a custom workflow language, automatic publication, unsupervised release, and a bespoke container or messaging platform are not roadmap commitments.
-

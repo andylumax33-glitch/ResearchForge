@@ -6,6 +6,7 @@ from zipfile import ZipFile
 
 import pytest
 
+from researchforge.fixtures import load_fixture_graph
 from researchforge.models import ResearchProject, ResearchState
 from researchforge.service import ApprovalRequiredError, ResearchRuntime, StageValidationError
 
@@ -19,7 +20,11 @@ def run_until(
             ResearchState.HUMAN_APPROVAL,
             ResearchState.RELEASE,
         }:
-            content = f"result for {project.state.value}".encode()
+            content = (
+                load_fixture_graph().model_dump_json().encode()
+                if project.state is ResearchState.LITERATURE_REVIEW
+                else f"result for {project.state.value}".encode()
+            )
             artifact = service.artifact_store.put_bytes(
                 f"{project.project_id}/{project.state.value}.txt",
                 content,
@@ -108,6 +113,40 @@ def test_corrupted_stage_artifact_cannot_advance(service: ResearchRuntime, works
         service.advance(project.project_id, actor="mock")
 
     assert service.get_project(project.project_id).state is ResearchState.SCOPING
+
+
+def test_literature_stage_rejects_unsupported_graph_without_advancing(
+    service: ResearchRuntime,
+) -> None:
+    project = service.create_project("evidence", "Reject unsupported claims")
+    project = service.advance(project.project_id, actor="mock").project
+    project = service.submit_and_advance(
+        project.project_id, actor="mock", filename="scope.txt", content=b"scope"
+    ).project
+    bad_graph = load_fixture_graph()
+    bad_card = bad_graph.cards[0].model_copy(update={"quote": "invented observation"})
+    bad_graph = bad_graph.model_copy(update={"cards": (bad_card,)})
+
+    with pytest.raises(StageValidationError, match="verification failed"):
+        service.submit_and_advance(
+            project.project_id,
+            actor="researcher",
+            filename="evidence.json",
+            content=bad_graph.model_dump_json().encode(),
+        )
+
+    unchanged = service.get_project(project.project_id)
+    assert unchanged.state is ResearchState.LITERATURE_REVIEW
+    assert unchanged.version == project.version
+
+    artifact = service.artifact_store.put_bytes(
+        f"{project.project_id}/literature_review/unsupported.json",
+        bad_graph.model_dump_json().encode(),
+        kind="literature_review_result",
+    )
+    with pytest.raises(StageValidationError, match="verification failed"):
+        service.add_artifact(project.project_id, artifact)
+    assert service.get_project(project.project_id).artifacts == project.artifacts
 
 
 def test_resume_restores_full_snapshot_without_future_artifacts(

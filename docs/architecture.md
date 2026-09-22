@@ -1,6 +1,6 @@
 # Architecture
 
-ResearchForge Phase 1 is a local, deterministic runtime skeleton. It separates orchestration, domain rules, persistence, and artifacts so later research capabilities can be added without weakening auditability.
+ResearchForge keeps a local, deterministic runtime. v0.2 adds literature discovery and evidence verification beside the existing orchestration, persistence, and artifact boundaries.
 
 ## Runtime shape
 
@@ -72,7 +72,15 @@ Extension boundaries are expressed as protocols:
 - `ResearchSpecialist` provides task-scoped research behavior.
 - `VerificationGate` decides whether an artifact set satisfies a stage.
 
-Phase 1 ships local implementations and a deterministic simulated specialist. It does not invoke remote models or execute generated code.
+The runtime ships local implementations and a deterministic simulated specialist. v0.2 adds a typed literature provider interface, but does not invoke remote models or execute generated code.
+
+## Literature and evidence boundary
+
+The fixture and opt-in Crossref providers return `PaperRecord` metadata. A separate graph carries `SourcePassage`, `EvidenceCard`, `Claim`, and `ScopeReport` values. Verification checks exact quoted text, passage SHA-256, paper and locator links, claim-to-card links, and search scope. It allows only claims whose complete statement appears in a linked quote. Unknown, changed, or out-of-scope material causes refusal.
+
+At the `LITERATURE_REVIEW` stage, the runtime checks this graph before accepting a `literature_review_result` artifact. A failed graph cannot change project state. Search results alone never satisfy the stage gate. The Paper2Agent adapter validates an external manifest; its generated MCP server is never started by ResearchForge.
+
+These checks establish consistency with a supplied passage, not independent authenticity of the underlying publisher document or scientific validity of the quoted claim.
 
 ## Local persistence
 
@@ -93,4 +101,4 @@ The persistence protocols are intentionally backend-neutral. PostgreSQL and obje
 
 ## Deferred components
 
-Real LLM providers, literature search, Paper2Agent, Docker or remote sandboxes, PostgreSQL, web UI, remote GPU execution, multi-user authorization, and domain packs are intentionally outside Phase 1. Their planned integration points are described in the [roadmap](roadmap.md).
+Real LLM providers, generated-code execution, Docker or remote sandboxes, PostgreSQL, web UI, remote GPU execution, multi-user authorization, and domain packs remain deferred. Their planned integration points are described in the [roadmap](roadmap.md).
