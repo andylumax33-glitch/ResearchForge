@@ -10,12 +10,15 @@ from uuid import UUID
 import typer
 
 from researchforge.artifacts import FileArtifactStore
-from researchforge.models import ResearchProject
+from researchforge.fixtures import load_fixture_graph
+from researchforge.literature_cli import literature_app
+from researchforge.models import ResearchProject, ResearchState
 from researchforge.repositories import ProjectNotFoundError, SQLiteStateRepository
 from researchforge.service import ResearchRuntime, StageValidationError
 from researchforge.state_machine import DEFAULT_STAGES
 
 app = typer.Typer(no_args_is_help=True, help="Evidence-grounded research workflow runtime.")
+app.add_typer(literature_app, name="literature")
 WorkspaceOption = Annotated[Path, typer.Option("--workspace", help="Runtime data directory")]
 
 
@@ -87,12 +90,15 @@ def advance(
     if DEFAULT_STAGES[project.state].required_artifact_kinds:
         if artifact is None and not mock:
             raise typer.BadParameter("--artifact or --mock is required")
-        content = (
-            artifact.read_bytes()
-            if artifact is not None
-            else f"mock result for {project.project_id} at {project.state.value}".encode()
-        )
-        filename = artifact.name if artifact is not None else "mock-result.txt"
+        if artifact is not None:
+            content = artifact.read_bytes()
+            filename = artifact.name
+        elif project.state is ResearchState.LITERATURE_REVIEW:
+            content = load_fixture_graph().model_dump_json().encode()
+            filename = "mock-evidence.json"
+        else:
+            content = f"mock result for {project.project_id} at {project.state.value}".encode()
+            filename = "mock-result.txt"
     try:
         if DEFAULT_STAGES[project.state].required_artifact_kinds:
             result = runtime.submit_and_advance(

@@ -5,6 +5,10 @@ from __future__ import annotations
 from pathlib import Path
 from uuid import UUID
 
+from pydantic import ValidationError
+
+from researchforge.evidence import answer_claims
+from researchforge.fixtures import load_graph_bytes
 from researchforge.models import (
     ApprovalDecision,
     ApprovalStatus,
@@ -47,6 +51,11 @@ class ResearchRuntime:
     def add_artifact(self, project_id: UUID, artifact: Artifact) -> ResearchProject:
         project = self.repository.get(project_id)
         self._validate_artifact(project, artifact)
+        if (
+            project.state is ResearchState.LITERATURE_REVIEW
+            and artifact.kind == "literature_review_result"
+        ):
+            self._validate_literature_artifact(artifact)
         updated = project.model_copy(
             update={
                 "artifacts": (*project.artifacts, artifact),
@@ -82,6 +91,8 @@ class ResearchRuntime:
         validate_transition(project.state, destination)
         if not DEFAULT_STAGES[project.state].required_artifact_kinds:
             return self._advance_loaded(project, actor=actor, verified=True)
+        if project.state is ResearchState.LITERATURE_REVIEW:
+            self._validate_literature_content(content)
         artifact = self.artifact_store.put_bytes(
             f"{project.project_id}/{project.state.value}/{filename}",
             content,
@@ -235,6 +246,8 @@ class ResearchRuntime:
         for artifact in project.artifacts:
             if artifact.kind in stage.required_artifact_kinds:
                 self._validate_artifact(project, artifact)
+                if project.state is ResearchState.LITERATURE_REVIEW:
+                    self._validate_literature_artifact(artifact)
                 verified_paths.append(artifact.path)
         if project.state is ResearchState.HUMAN_APPROVAL and (
             not project.approvals or project.approvals[-1].status is not ApprovalStatus.APPROVED
@@ -248,3 +261,20 @@ class ResearchRuntime:
         if not artifact.path.startswith(f"{project.project_id}/"):
             raise StageValidationError("artifact does not belong to this project")
         self.artifact_store.get_bytes(artifact)
+
+    def _validate_literature_artifact(self, artifact: Artifact) -> None:
+        self._validate_literature_content(self.artifact_store.get_bytes(artifact))
+
+    @staticmethod
+    def _validate_literature_content(content: bytes) -> None:
+        try:
+            graph = load_graph_bytes(content)
+        except (ValueError, ValidationError) as error:
+            raise StageValidationError(
+                "literature artifact is not a valid evidence graph"
+            ) from error
+        decision = answer_claims(graph, tuple(claim.claim_id for claim in graph.claims))
+        if not decision.accepted:
+            raise StageValidationError(
+                "literature evidence verification failed: " + "; ".join(decision.reasons)
+            )

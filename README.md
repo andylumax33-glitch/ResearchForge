@@ -2,7 +2,7 @@
 
 **ResearchForge** is an evidence-oriented runtime for reproducible research workflows. Its internal architecture is currently code-named **ScholarOS v4**.
 
-Phase 1 is deliberately small: it provides a deterministic, recoverable runtime skeleton for moving a research project through explicit stages. It does **not** connect to a real LLM, search literature, run generated code in Docker, or provide a web interface yet.
+The v0.2 release combines the recoverable runtime with literature metadata discovery and literal, located evidence verification. It does not connect to an LLM, run generated code, or provide a web interface.
 
 ## Why ResearchForge?
 
@@ -22,7 +22,7 @@ INTAKE → SCOPING → LITERATURE_REVIEW → BASELINE_REPRODUCTION
 Requirements: Python 3.12+ and [uv](https://docs.astral.sh/uv/).
 
 ```bash
-git clone https://github.com/<owner>/ResearchForge.git
+git clone https://github.com/andylumax33-glitch/ResearchForge.git
 cd ResearchForge
 uv sync --all-extras --dev
 uv run researchforge --help
@@ -36,12 +36,23 @@ uv run researchforge init "Railway pilot" --goal "Validate the runtime"
 uv run researchforge status PROJECT_ID
 ```
 
-Use `advance` to submit the artifact required by the next stage. Phase 1 also offers `--mock` to generate a deterministic test artifact. The runtime refuses missing, malformed, or unsafe artifacts without partially changing project state.
+Use `advance` to submit the artifact required by the next stage. `--mock` generates deterministic test artifacts. At `LITERATURE_REVIEW`, a real `--artifact` must contain a verified evidence graph; the mock path uses the bundled synthetic graph. The runtime refuses missing, malformed, or unsafe artifacts without partially changing project state.
 
 ```bash
 uv run researchforge advance PROJECT_ID --mock
 uv run researchforge status PROJECT_ID
 ```
+
+Search the bundled literature example or opt in to live Crossref bibliographic metadata. Search records do not count as verified evidence:
+
+```bash
+uv run researchforge literature search railway
+uv run researchforge literature search "railway irregularity" --provider crossref --limit 5
+uv run researchforge literature demo --output evidence.json
+uv run researchforge literature verify evidence.json
+```
+
+The demo is explicitly synthetic. Its answer is allowed only because the claim is a literal quotation from a located passage and the passage hash matches. See [Literature and evidence](docs/literature-evidence.md) for the graph contract, evaluation cases, provider interface, and Paper2Agent adapter boundary.
 
 At a human gate, record the decision explicitly:
 
@@ -60,7 +71,7 @@ uv run researchforge export PROJECT_ID --output ./exports/project.zip
 
 For a guided walkthrough, see [examples/README.md](examples/README.md). Exact flags are also available through `researchforge <command> --help`.
 
-## Phase 1 capabilities
+## Capabilities
 
 - Immutable domain models and validated artifact contracts
 - Deterministic state transitions and explicit acceptance gates
@@ -71,6 +82,10 @@ For a guided walkthrough, see [examples/README.md](examples/README.md). Exact fl
 - Model, literature, sandbox, storage, specialist, and verification extension interfaces
 - Deterministic mock artifacts for end-to-end runtime tests
 - Structured logs with sensitive-value redaction
+- Replaceable fixed-fixture and Crossref metadata providers
+- Paper records, scoped source passages, evidence cards, and claim-evidence graph
+- Citation/quote integrity checks and evidence-bound refusal
+- Metadata-only external Paper2Agent manifest adapter
 
 ## Architecture and roadmap
 
@@ -92,7 +107,7 @@ uv run pytest --cov=researchforge --cov-report=term-missing --cov-fail-under=80
 
 ## Status
 
-ResearchForge is pre-1.0 software. Phase 1 establishes the runtime contract; later capabilities must preserve its auditability and failure-safety guarantees.
+ResearchForge is pre-1.0 software. v0.2 verifies literal support within a supplied graph; it does not independently authenticate external source documents or infer whether a scientific claim is true. Later capabilities must preserve the runtime's auditability and failure-safety guarantees.
 
 ## License
 
