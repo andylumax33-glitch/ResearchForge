@@ -7,6 +7,20 @@ from uuid import UUID
 
 from pydantic import ValidationError
 
+from researchforge.baseline import (
+    REQUEST_KIND,
+    RESULT_KIND,
+    BaselineRunner,
+    ExecutionRequest,
+    ExecutionResult,
+    ReproductionReceipt,
+    assess,
+    digest,
+    ensure_baseline_stage,
+    preserve_execution_history,
+    requests,
+    validate_receipt,
+)
 from researchforge.evidence import answer_claims
 from researchforge.fixtures import load_graph_bytes
 from researchforge.models import (
@@ -47,6 +61,100 @@ class ResearchRuntime:
 
     def get_project(self, project_id: UUID) -> ResearchProject:
         return self.repository.get(project_id)
+
+    def reproduce_baseline(
+        self,
+        project_id: UUID,
+        request: ExecutionRequest,
+        runner: BaselineRunner,
+    ) -> ReproductionReceipt:
+        """Persist intent before execution. A new call is a new attempt, never resume."""
+        request = ExecutionRequest.model_validate_json(request.model_dump_json())
+        project = self.repository.get(project_id)
+        ensure_baseline_stage(project)
+        previous = tuple(
+            ExecutionRequest.model_validate_json(self.artifact_store.get_bytes(item))
+            for item in requests(project)
+        )
+        if any(item.execution_id == request.execution_id for item in previous):
+            raise StageValidationError("execution ID already recorded; retry requires a new ID")
+        # Conservatively reserve the full time limit for every attempt, including
+        # interrupted attempts. Snapshot recovery cannot refund these reservations.
+        reserved = sum(item.protocol.timeout_seconds for item in previous)
+        limit = project.budget.compute_seconds_limit
+        if limit and (
+            project.budget.compute_seconds_used + reserved + request.protocol.timeout_seconds
+            > limit
+        ):
+            raise StageValidationError("baseline execution reservation exceeds compute budget")
+        prefix = f"{project_id}/baseline/{request.execution_id}"
+
+        def put(name: str, content: bytes, kind: str) -> Artifact:
+            return self.artifact_store.put_bytes(f"{prefix}/{name}", content, kind=kind)
+
+        request_artifact = put("request.json", request.model_dump_json().encode(), REQUEST_KIND)
+        enrolled = project.model_copy(
+            update={
+                "artifacts": (*project.artifacts, request_artifact),
+                "version": project.version + 1,
+                "updated_at": utc_now(),
+            }
+        )
+        self.repository.save(enrolled, expected_version=project.version)
+        # Unexpected adapter exceptions leave a durable pending request, not success.
+        output = runner.execute(request)
+        stdout = put("stdout.txt", output.stdout.encode(), "baseline_stdout")
+        stderr = put("stderr.txt", output.stderr.encode(), "baseline_stderr")
+        result = ExecutionResult(
+            execution_id=request.execution_id,
+            request_artifact_id=request_artifact.artifact_id,
+            request_sha256=request_artifact.checksum,
+            dataset_sha256=digest(request.protocol.dataset.content()),
+            protocol_sha256=digest(request.protocol.model_dump_json().encode()),
+            environment_id=request.image_id,
+            exit_code=output.exit_code,
+            timed_out=output.timed_out,
+            failure=output.failure,
+            elapsed_seconds=output.elapsed_seconds,
+            stdout_artifact_id=stdout.artifact_id,
+            stderr_artifact_id=stderr.artifact_id,
+        )
+        result_artifact = put("result.json", result.model_dump_json().encode(), RESULT_KIND)
+        assessment = assess(
+            request,
+            exit_code=output.exit_code,
+            timed_out=output.timed_out,
+            stdout=output.stdout,
+            failure=output.failure,
+        )
+        receipt = ReproductionReceipt(
+            request_artifact_id=request_artifact.artifact_id,
+            result_artifact_id=result_artifact.artifact_id,
+            assessment=assessment,
+        )
+        receipt_artifact = put(
+            "receipt.json", receipt.model_dump_json().encode(), "baseline_reproduction_result"
+        )
+        # Append a completed attempt atomically. Concurrent state changes cause a
+        # conflict, leaving the original request pending (fail closed).
+        completed = enrolled.model_copy(
+            update={
+                "artifacts": (
+                    *enrolled.artifacts,
+                    stdout,
+                    stderr,
+                    result_artifact,
+                    receipt_artifact,
+                ),
+                "failure_reason": "; ".join(assessment.reasons)
+                if not assessment.accepted
+                else None,
+                "version": enrolled.version + 1,
+                "updated_at": utc_now(),
+            }
+        )
+        self.repository.save(completed, expected_version=enrolled.version)
+        return receipt
 
     def add_artifact(self, project_id: UUID, artifact: Artifact) -> ResearchProject:
         project = self.repository.get(project_id)
@@ -219,6 +327,7 @@ class ResearchRuntime:
         )
         updated = snapshot.model_copy(
             update={
+                "artifacts": preserve_execution_history(project, snapshot),
                 "version": project.version + 1,
                 "transitions": (*snapshot.transitions, resume_record),
                 "last_checkpoint_id": resume_checkpoint.checkpoint_id,
@@ -237,6 +346,12 @@ class ResearchRuntime:
     def _validate_exit(self, project: ResearchProject, *, verified: bool) -> tuple[str, ...]:
         if not verified:
             raise StageValidationError("verification gate did not pass")
+        baseline_details: tuple[str, ...] = ()
+        if project.state is ResearchState.BASELINE_REPRODUCTION and requests(project):
+            try:
+                baseline_details = validate_receipt(project, self.artifact_store)
+            except (ValueError, OSError) as error:
+                raise StageValidationError(str(error)) from error
         stage = DEFAULT_STAGES[project.state]
         actual_kinds = {artifact.kind for artifact in project.artifacts}
         missing = stage.required_artifact_kinds - actual_kinds
@@ -253,8 +368,10 @@ class ResearchRuntime:
             not project.approvals or project.approvals[-1].status is not ApprovalStatus.APPROVED
         ):
             raise ApprovalRequiredError("release requires the latest human decision to be approved")
-        return tuple(f"verified artifact {path}" for path in verified_paths) or (
-            "stage contract verified",
+        return (
+            baseline_details
+            or tuple(f"verified artifact {path}" for path in verified_paths)
+            or ("stage contract verified",)
         )
 
     def _validate_artifact(self, project: ResearchProject, artifact: Artifact) -> None:
