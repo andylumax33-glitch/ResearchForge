@@ -3,9 +3,11 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
 from typer.testing import CliRunner
 
+from researchforge.baseline import RunnerOutput
 from researchforge.cli import app
 
 runner = CliRunner()
@@ -65,3 +67,70 @@ def test_cli_mock_workflow_approval_and_export(tmp_path: Path) -> None:
     exported = invoke(tmp_path, "export", project_id, "--output", str(archive))
     assert exported.exit_code == 0, exported.output
     assert archive.is_file()
+
+
+def test_reproduce_cli_runs_gate_and_outputs_receipt(tmp_path: Path) -> None:
+    initialized = invoke(tmp_path, "init", "controlled")
+    project_id = json.loads(initialized.stdout)["project_id"]
+    for _ in range(3):
+        assert invoke(tmp_path, "advance", project_id, "--mock").exit_code == 0
+    protocol = Path(__file__).parents[2] / "examples" / "baseline-protocol.json"
+    with patch(
+        "researchforge.cli.DockerBaselineRunner.execute",
+        return_value=RunnerOutput(exit_code=0, stdout='{"mean":2}'),
+    ):
+        result = invoke(
+            tmp_path,
+            "reproduce",
+            project_id,
+            "--protocol",
+            str(protocol),
+            "--image-id",
+            "sha256:" + "a" * 64,
+            "--advance",
+        )
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.stdout)["assessment"]["accepted"]
+    assert json.loads(invoke(tmp_path, "status", project_id).stdout)["state"] == (
+        "HYPOTHESIS_GENERATION"
+    )
+
+
+def test_reproduce_cli_backend_failure_is_recorded(tmp_path: Path) -> None:
+    initialized = invoke(tmp_path, "init", "controlled-failure")
+    project_id = json.loads(initialized.stdout)["project_id"]
+    for _ in range(3):
+        assert invoke(tmp_path, "advance", project_id, "--mock").exit_code == 0
+    protocol = Path(__file__).parents[2] / "examples" / "baseline-protocol.json"
+    with patch("researchforge.docker_runner.shutil.which", return_value=None):
+        result = invoke(
+            tmp_path,
+            "reproduce",
+            project_id,
+            "--protocol",
+            str(protocol),
+            "--image-id",
+            "sha256:" + "a" * 64,
+            "--advance",
+        )
+    assert result.exit_code == 1
+    assert not json.loads(result.stdout)["assessment"]["accepted"]
+    status = json.loads(invoke(tmp_path, "status", project_id).stdout)
+    assert status["state"] == "BASELINE_REPRODUCTION"
+    assert "Docker executable unavailable" in status["failure_reason"]
+    assert invoke(tmp_path, "advance", project_id, "--mock").exit_code == 1
+
+
+def test_reproduce_cli_rejects_missing_protocol(tmp_path: Path) -> None:
+    project_id = json.loads(invoke(tmp_path, "init", "bad-protocol").stdout)["project_id"]
+    result = invoke(
+        tmp_path,
+        "reproduce",
+        project_id,
+        "--protocol",
+        str(tmp_path / "missing"),
+        "--image-id",
+        "sha256:" + "a" * 64,
+    )
+    assert result.exit_code == 1
+    assert "64 KiB" in result.output

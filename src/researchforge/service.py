@@ -78,6 +78,12 @@ class ResearchRuntime:
         )
         if any(item.execution_id == request.execution_id for item in previous):
             raise StageValidationError("execution ID already recorded; retry requires a new ID")
+        if (
+            previous
+            and request.protocol != previous[-1].protocol
+            and request.protocol.version <= previous[-1].protocol.version
+        ):
+            raise StageValidationError("changed protocol requires a higher protocol version")
         # Conservatively reserve the full time limit for every attempt, including
         # interrupted attempts. Snapshot recovery cannot refund these reservations.
         reserved = sum(item.protocol.timeout_seconds for item in previous)

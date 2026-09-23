@@ -161,6 +161,44 @@ def test_duplicate_execution_id_rejected(service: ResearchRuntime) -> None:
         service.reproduce_baseline(project.project_id, attempt, FakeRunner())
 
 
+def test_changed_protocol_requires_new_version(service: ResearchRuntime) -> None:
+    project = at_baseline(service)
+    service.reproduce_baseline(project.project_id, request(), FakeRunner())
+    changed_protocol = request().protocol.model_copy(update={"reference_mean": 9.0})
+    changed = request().model_copy(update={"protocol": changed_protocol})
+    with pytest.raises(StageValidationError, match="higher protocol version"):
+        service.reproduce_baseline(project.project_id, changed, FakeRunner())
+    changed = changed.model_copy(
+        update={
+            "protocol": changed_protocol.model_copy(update={"version": 2}),
+        }
+    )
+    receipt = service.reproduce_baseline(project.project_id, changed, FakeRunner())
+    assert not receipt.assessment.accepted
+
+
+def test_forged_pass_is_recomputed(service: ResearchRuntime) -> None:
+    project = at_baseline(service)
+    receipt = service.reproduce_baseline(
+        project.project_id,
+        request(),
+        FakeRunner(RunnerOutput(exit_code=0, stdout='{"mean":9}')),
+    )
+    forged = receipt.model_copy(
+        update={
+            "assessment": receipt.assessment.model_copy(update={"accepted": True, "reasons": ()}),
+        }
+    )
+    artifact = service.artifact_store.put_bytes(
+        f"{project.project_id}/forged-pass.json",
+        forged.model_dump_json().encode(),
+        kind="baseline_reproduction_result",
+    )
+    service.add_artifact(project.project_id, artifact)
+    with pytest.raises(StageValidationError, match="reproduction failed"):
+        service.advance(project.project_id, actor="operator")
+
+
 def test_linked_log_tampering_blocks_gate(service: ResearchRuntime, workspace: Path) -> None:
     project = at_baseline(service)
     service.reproduce_baseline(project.project_id, request(), FakeRunner())
@@ -209,9 +247,19 @@ def test_export_and_reopen_preserve_new_payloads(service: ResearchRuntime, works
 
 
 @pytest.mark.skipif(not os.environ.get("RF_DOCKER_IMAGE"), reason="requires real Docker image ID")
-def test_real_docker_baseline(service: ResearchRuntime) -> None:
+@pytest.mark.parametrize("reference, expected", [(2.0, True), (9.0, False)])
+def test_real_docker_baseline(service: ResearchRuntime, reference: float, expected: bool) -> None:
     project = at_baseline(service)
-    attempt = request().model_copy(update={"image_id": os.environ["RF_DOCKER_IMAGE"]})
+    attempt = request().model_copy(
+        update={
+            "image_id": os.environ["RF_DOCKER_IMAGE"],
+            "protocol": request().protocol.model_copy(update={"reference_mean": reference}),
+        }
+    )
     receipt = service.reproduce_baseline(project.project_id, attempt, DockerBaselineRunner())
-    assert receipt.assessment.accepted, receipt.assessment.reasons
-    service.advance(project.project_id, actor="docker-integration")
+    assert receipt.assessment.accepted is expected, receipt.assessment.reasons
+    if expected:
+        service.advance(project.project_id, actor="docker-integration")
+    else:
+        with pytest.raises(StageValidationError):
+            service.advance(project.project_id, actor="docker-integration")

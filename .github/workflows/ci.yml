@@ -31,3 +31,20 @@ jobs:
         run: uv run bandit -q -r src
       - name: Test with coverage
         run: uv run pytest --cov=researchforge --cov-report=term-missing --cov-report=xml --cov-fail-under=80
+
+  controlled-baseline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - run: uv python install 3.12
+      - run: uv sync --all-extras --dev
+      - name: Prepare explicit trusted fixture image
+        run: |
+          docker pull python:3.12-alpine
+          image_id=$(docker image inspect python:3.12-alpine --format '{{.Id}}')
+          test -n "$image_id"
+          echo "RF_DOCKER_IMAGE=$image_id" >> "$GITHUB_ENV"
+      - name: Test actual isolated baseline and regression suite
+        run: uv run pytest --cov=researchforge --cov-report=term-missing --cov-fail-under=80
