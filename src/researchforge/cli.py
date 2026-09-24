@@ -10,6 +10,8 @@ from uuid import UUID
 import typer
 
 from researchforge.artifacts import FileArtifactStore
+from researchforge.baseline import BaselineProtocol, ExecutionRequest
+from researchforge.docker_runner import DockerBaselineRunner
 from researchforge.fixtures import load_fixture_graph
 from researchforge.literature_cli import literature_app
 from researchforge.models import ResearchProject, ResearchState
@@ -114,6 +116,41 @@ def advance(
         raise typer.Exit(1) from None
     _ = json_output
     typer.echo(_json_project(result.project))
+
+
+@app.command()
+def reproduce(
+    project_id: Annotated[str, typer.Argument()],
+    protocol: Annotated[
+        Path, typer.Option("--protocol", help="Versioned numeric baseline protocol")
+    ],
+    image_id: Annotated[
+        str, typer.Option("--image-id", help="Trusted local Docker sha256 image ID")
+    ],
+    advance_on_pass: Annotated[
+        bool, typer.Option("--advance", help="Apply runtime gate on pass")
+    ] = False,
+    workspace: WorkspaceOption = Path(".researchforge"),
+) -> None:
+    """Run one isolated baseline attempt; persist failures and never silently retry."""
+    runtime = _runtime(workspace)
+    project = _project(runtime, project_id)
+    try:
+        if not protocol.is_file() or protocol.stat().st_size > 65536:
+            raise ValueError("protocol must be a file no larger than 64 KiB")
+        request = ExecutionRequest(
+            protocol=BaselineProtocol.model_validate_json(protocol.read_bytes()),
+            image_id=image_id,
+        )
+        receipt = runtime.reproduce_baseline(project.project_id, request, DockerBaselineRunner())
+        if receipt.assessment.accepted and advance_on_pass:
+            runtime.advance(project.project_id, actor="cli:reproduce")
+    except (ValueError, OSError) as error:
+        typer.echo(str(error), err=True)
+        raise typer.Exit(1) from None
+    typer.echo(receipt.model_dump_json())
+    if not receipt.assessment.accepted:
+        raise typer.Exit(1)
 
 
 @app.command()

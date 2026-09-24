@@ -4,6 +4,10 @@
 
 The v0.2 release combines the recoverable runtime with literature metadata discovery and literal, located evidence verification. It does not connect to an LLM, run generated code, or provide a web interface.
 
+The development branch adds an opt-in [controlled baseline reproduction slice](docs/controlled-baseline.md):
+a fixed numeric fixture runs through Docker, produces linked evidence, and is checked by the
+runtime before advancing. This is not completion of v0.3 or a general generated-code runner.
+
 ## Why ResearchForge?
 
 Research work should not advance because an agent says it succeeded. A stage advances only when its declared artifacts validate, its transition is legal, and any required human decision has been recorded. Every transition is stored with its inputs, outputs, actor, validation result, budget usage, failure details, and parent checkpoint.
